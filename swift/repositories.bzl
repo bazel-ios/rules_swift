@@ -51,9 +51,9 @@ def swift_rules_dependencies():
         http_archive,
         name = "build_bazel_apple_support",
         urls = [
-            "https://github.com/bazelbuild/apple_support/releases/download/0.9.0/apple_support.0.9.0.tar.gz",
+            "https://github.com/bazelbuild/apple_support/releases/download/0.9.1/apple_support.0.9.1.tar.gz",
         ],
-        sha256 = "36d60bce680446ab534b141c47f2aef6b9c598267ef3450b7d74b9d81e1fd6bd",
+        sha256 = "02ac04ff0a0de1e891a1fa8839cc6a5957e3c4a80856545aa35a786d15aad108",
     )
 
     _maybe(
@@ -111,12 +111,11 @@ def swift_rules_dependencies():
     _maybe(
         http_archive,
         name = "com_google_protobuf",
-        # latest as of 2020-09-01
         urls = [
-            "https://github.com/protocolbuffers/protobuf/archive/v3.13.0.zip",
+            "https://github.com/protocolbuffers/protobuf/archive/v3.14.0.zip",
         ],
-        sha256 = "1c744a6a1f2c901e68c5521bc275e22bdc66256eeb605c2781923365b7087e5f",
-        strip_prefix = "protobuf-3.13.0",
+        sha256 = "bf0e5070b4b99240183b29df78155eee335885e53a8af8683964579c214ad301",
+        strip_prefix = "protobuf-3.14.0",
         type = "zip",
     )
 

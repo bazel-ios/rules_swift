@@ -43,7 +43,9 @@ indirect (transitive) dependents.
         ),
     }
 
-def swift_compilation_attrs(additional_deps_aspects = []):
+def swift_compilation_attrs(
+        additional_deps_aspects = [],
+        requires_srcs = True):
     """Returns an attribute dictionary for rules that compile Swift code.
 
     The returned dictionary contains the subset of attributes that are shared by
@@ -76,6 +78,8 @@ def swift_compilation_attrs(additional_deps_aspects = []):
             by the individual rules to avoid potential circular dependencies
             between the API and the aspects; the API loaded the aspects
             directly, then those aspects would not be able to load the API.
+        requires_srcs: Indicates whether the `srcs` attribute should be marked
+            as mandatory and non-empty. Defaults to `True`.
 
     Returns:
         A new attribute dictionary that can be added to the attributes of a
@@ -89,11 +93,13 @@ def swift_compilation_attrs(additional_deps_aspects = []):
         swift_toolchain_attrs(),
         {
             "srcs": attr.label_list(
-                flags = ["DIRECT_COMPILE_TIME_INPUT"],
+                allow_empty = not requires_srcs,
                 allow_files = ["swift"],
                 doc = """\
 A list of `.swift` source files that will be compiled into the library.
 """,
+                flags = ["DIRECT_COMPILE_TIME_INPUT"],
+                mandatory = requires_srcs,
             ),
             "copts": attr.string_list(
                 doc = """\
@@ -171,6 +177,7 @@ Allowed kinds of dependencies are:
 
 *   `swift_c_module`, `swift_import` and `swift_library` (or anything
     propagating `SwiftInfo`)
+
 *   `cc_library` (or anything propagating `CcInfo`)
 
 Additionally, on platforms that support Objective-C interop, `objc_library`
@@ -186,7 +193,9 @@ Linux), those dependencies will be **ignored.**
         **kwargs
     )
 
-def swift_library_rule_attrs(additional_deps_aspects = []):
+def swift_library_rule_attrs(
+        additional_deps_aspects = [],
+        requires_srcs = True):
     """Returns an attribute dictionary for `swift_library`-like rules.
 
     The returned dictionary contains the same attributes that are defined by the
@@ -221,6 +230,8 @@ def swift_library_rule_attrs(additional_deps_aspects = []):
             by the individual rules to avoid potential circular dependencies
             between the API and the aspects; the API loaded the aspects
             directly, then those aspects would not be able to load the API.
+        requires_srcs: Indicates whether the `srcs` attribute should be marked
+            as mandatory and non-empty. Defaults to `True`.
 
     Returns:
         A new attribute dictionary that can be added to the attributes of a
@@ -229,6 +240,7 @@ def swift_library_rule_attrs(additional_deps_aspects = []):
     return dicts.add(
         swift_compilation_attrs(
             additional_deps_aspects = additional_deps_aspects,
+            requires_srcs = requires_srcs,
         ),
         swift_config_attrs(),
         {
@@ -325,7 +337,7 @@ def swift_toolchain_driver_attrs():
     return {
         "swift_executable": attr.label(
             allow_single_file = True,
-            cfg = "host",
+            cfg = "exec",
             doc = """\
 A replacement Swift driver executable.
 
@@ -337,7 +349,7 @@ that it is invoked in the correct mode (i.e., `swift`, `swiftc`,
         ),
         "_default_swift_executable": attr.label(
             allow_files = True,
-            cfg = "host",
+            cfg = "exec",
             default = Label(
                 "@build_bazel_rules_swift//swift:default_swift_executable",
             ),

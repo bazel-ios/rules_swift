@@ -36,6 +36,7 @@ def _binary_rule_attrs(stamp_default):
     return dicts.add(
         swift_common.compilation_attrs(
             additional_deps_aspects = [swift_common.swift_clang_module_aspect],
+            requires_srcs = False,
         ),
         {
             "linkopts": attr.string_list(
@@ -66,8 +67,10 @@ into the binary. Possible values are:
 * `stamp = 1`: Stamp the build information into the binary. Stamped binaries are
   only rebuilt when their dependencies change. Use this if there are tests that
   depend on the build information.
+
 * `stamp = 0`: Always replace build information by constant values. This gives
   good build result caching.
+
 * `stamp = -1`: Embedding of build information is controlled by the
   `--[no]stamp` flag.
 """,
@@ -246,6 +249,7 @@ def _swift_linking_rule_impl(
         name = ctx.label.name,
         objects = objects_to_link,
         output_type = "executable",
+        owner = ctx.label,
         stamp = ctx.attr.stamp,
         swift_toolchain = swift_toolchain,
         user_link_flags = user_link_flags,

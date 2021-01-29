@@ -17,6 +17,7 @@
 load("@bazel_skylib//lib:collections.bzl", "collections")
 load("@bazel_skylib//lib:partial.bzl", "partial")
 load("@bazel_skylib//lib:paths.bzl", "paths")
+load("@bazel_skylib//lib:sets.bzl", "sets")
 load("@bazel_skylib//lib:types.bzl", "types")
 load(
     ":actions.bzl",
@@ -43,7 +44,6 @@ load(
     "SWIFT_FEATURE_ENABLE_TESTING",
     "SWIFT_FEATURE_FASTBUILD",
     "SWIFT_FEATURE_FULL_DEBUG_INFO",
-    "SWIFT_FEATURE_IMPLICIT_MODULES",
     "SWIFT_FEATURE_INDEX_WHILE_BUILDING",
     "SWIFT_FEATURE_MINIMAL_DEPS",
     "SWIFT_FEATURE_MODULE_MAP_HOME_IS_CWD",
@@ -62,6 +62,7 @@ load(
     "SWIFT_FEATURE_VFSOVERLAY",
 )
 load(":features.bzl", "are_all_features_enabled", "is_feature_enabled")
+load(":module_maps.bzl", "write_module_map")
 load(":providers.bzl", "SwiftInfo", "create_swift_info")
 load(":toolchain_config.bzl", "swift_toolchain_config")
 load(
@@ -445,10 +446,8 @@ def compile_action_configs():
                 swift_action_names.DERIVE_FILES,
             ],
             configurators = [_global_module_cache_configurator],
-            features = [
-                SWIFT_FEATURE_IMPLICIT_MODULES,
-                SWIFT_FEATURE_USE_GLOBAL_MODULE_CACHE,
-            ],
+            features = [SWIFT_FEATURE_USE_GLOBAL_MODULE_CACHE],
+            not_features = [SWIFT_FEATURE_USE_C_MODULES],
         ),
         swift_toolchain_config.action_config(
             actions = [
@@ -460,9 +459,14 @@ def compile_action_configs():
                     "-Xwrapped-swift=-ephemeral-module-cache",
                 ),
             ],
-            features = [SWIFT_FEATURE_IMPLICIT_MODULES],
-            not_features = [SWIFT_FEATURE_USE_GLOBAL_MODULE_CACHE],
+            not_features = [
+                [SWIFT_FEATURE_USE_C_MODULES],
+                [SWIFT_FEATURE_USE_GLOBAL_MODULE_CACHE],
+            ],
         ),
+        # When using C modules, disable the implicit search for module map files
+        # because all of them, including system dependencies, will be provided
+        # explicitly.
         swift_toolchain_config.action_config(
             actions = [
                 swift_action_names.COMPILE,
@@ -470,17 +474,33 @@ def compile_action_configs():
                 swift_action_names.PRECOMPILE_C_MODULE,
             ],
             configurators = [
-                # If we're consuming explicit modules of C dependencies, disable
-                # all implicit module usage (both searching for module maps and
-                # implicit compilation) to ensure that all modules must be
-                # explicitly provided.
-                swift_toolchain_config.add_arg(
-                    "-Xcc",
-                    "-fno-implicit-modules",
-                ),
                 swift_toolchain_config.add_arg(
                     "-Xcc",
                     "-fno-implicit-module-maps",
+                ),
+            ],
+            features = [SWIFT_FEATURE_USE_C_MODULES],
+        ),
+        # Do not allow implicit modules to be used at all when emitting an
+        # explicit C/Objective-C module. Consider the case of two modules A and
+        # B, where A depends on B. If B does not emit an explicit module, then
+        # when A is compiled it would contain a hardcoded reference to B via its
+        # path in the implicit module cache. Thus, A would not be movable; some
+        # library importing A would try to resolve B at that path, which may no
+        # longer exist when the upstream library is built.
+        #
+        # This implies that for a C/Objective-C library to build as an explicit
+        # module, all of its dependencies must as well. On the other hand, a
+        # Swift library can be compiled with some of its Objective-C
+        # dependencies still using implicit modules, as long as no Objective-C
+        # library wants to import that Swift library's generated header and
+        # build itself as an explicit module.
+        swift_toolchain_config.action_config(
+            actions = [swift_action_names.PRECOMPILE_C_MODULE],
+            configurators = [
+                swift_toolchain_config.add_arg(
+                    "-Xcc",
+                    "-fno-implicit-modules",
                 ),
             ],
             features = [SWIFT_FEATURE_USE_C_MODULES],
@@ -906,96 +926,123 @@ def _collect_clang_module_inputs(
         `swift_toolchain_config.config_result`) that contains the input
         artifacts for the action.
     """
-    module_inputs = []
-    header_depsets = []
+    direct_inputs = []
+    transitive_inputs = []
 
-    # Swift compiles (not Clang module compiles) that prefer precompiled modules
-    # do not need the full set of transitive headers.
-    if cc_info and not (is_swift and prefer_precompiled_modules):
-        header_depsets.append(cc_info.compilation_context.headers)
+    if cc_info:
+        # The headers stored in the `cc_info` argument's compilation context
+        # differ depending on the kind of action we're invoking:
+        if (is_swift and not prefer_precompiled_modules) or not is_swift:
+            # If this is a `SwiftCompile` with explicit modules disabled, the
+            # `headers` field is an already-computed set of the transitive
+            # headers of all the deps. (For an explicit module build, we skip it
+            # and will more selectively pick subsets for any individual modules
+            # that need to fallback to implicit modules in the loop below).
+            #
+            # If this is a `SwiftPrecompileCModule`, then by definition we're
+            # only here in a build with explicit modules enabled. We should only
+            # need the direct headers of the module being compiled and its
+            # direct dependencies (the latter because Clang needs them present
+            # on the file system to map them to the module that contains them.)
+            # However, we may also need some of the transitive headers, if the
+            # module has dependencies that aren't recognized as modules (e.g.,
+            # `cc_library` targets without the `swift_module` tag) and the
+            # module's headers include those. This will likely over-estimate the
+            # needed inputs, but we can't do better without include scanning in
+            # Starlark.
+            transitive_inputs.append(cc_info.compilation_context.headers)
+
+    # Some rules still use the `umbrella_header` field to propagate a header
+    # that they don't also include in `CcInfo.compilation_context.headers`, so
+    # we also need to pull this in for the time being.
+    if not prefer_precompiled_modules and objc_info:
+        transitive_inputs.append(objc_info.umbrella_header)
 
     for module in modules:
         clang_module = module.clang
-        module_map = clang_module.module_map
-        if prefer_precompiled_modules:
-            # If the build prefers precompiled modules, use the .pcm if it
-            # exists; otherwise, use the textual module map and the headers for
-            # that module (because we only want to propagate the headers that
-            # are required, not the full transitive set).
-            precompiled_module = clang_module.precompiled_module
-            if precompiled_module:
-                module_inputs.append(precompiled_module)
-            else:
-                module_inputs.extend(
-                    clang_module.compilation_context.direct_headers,
-                )
-                module_inputs.extend(
-                    clang_module.compilation_context.direct_textual_headers,
-                )
 
         # Add the module map, which we use for both implicit and explicit module
-        # builds. For implicit module builds, we don't worry about the headers
-        # above because we collect the full transitive header set below.
-        if not types.is_string(module_map):
-            module_inputs.append(module_map)
+        # builds.
+        module_map = clang_module.module_map
+        if not module.is_system and not types.is_string(module_map):
+            direct_inputs.append(module_map)
 
-    # If we prefer textual module maps and headers for the build, fall back to
-    # using the full set of transitive headers.
-    if not prefer_precompiled_modules:
-        if objc_info:
-            header_depsets.append(objc_info.umbrella_header)
+        if prefer_precompiled_modules:
+            precompiled_module = clang_module.precompiled_module
+            if precompiled_module:
+                # For builds preferring explicit modules, use it if we have it
+                # and don't include any headers as inputs.
+                direct_inputs.append(precompiled_module)
+            else:
+                # If we don't have an explicit module, we need the transitive
+                # headers from the compilation context associated with the
+                # module. This will likely overestimate the headers that will
+                # actually be used in the action, but until we can use include
+                # scanning from Starlark, we can't compute a more precise input
+                # set.
+                transitive_inputs.append(
+                    clang_module.compilation_context.headers,
+                )
 
     return swift_toolchain_config.config_result(
-        inputs = module_inputs,
-        transitive_inputs = header_depsets,
+        inputs = direct_inputs,
+        transitive_inputs = transitive_inputs,
     )
 
-def _clang_modulemap_dependency_args(module):
-    """Returns `swiftc` arguments for the module map of a Clang module.
+def _clang_modulemap_dependency_args(module, ignore_system = True):
+    """Returns a `swiftc` argument for the module map of a Clang module.
 
     Args:
         module: A struct containing information about the module, as defined by
             `swift_common.create_module`.
+        ignore_system: If `True` and the module is a system module, no flag
+            should be returned. Defaults to `True`.
 
     Returns:
-        A list of arguments to pass to `swiftc`.
+        A list of arguments, possibly empty, to pass to `swiftc` (without the
+        `-Xcc` prefix).
     """
+    if module.is_system and ignore_system:
+        return []
+
     module_map = module.clang.module_map
     if types.is_string(module_map):
         module_map_path = module_map
     else:
         module_map_path = module_map.path
 
-    return [
-        "-Xcc",
-        "-fmodule-map-file={}".format(module_map_path),
-    ]
+    return ["-fmodule-map-file={}".format(module_map_path)]
 
 def _clang_module_dependency_args(module):
     """Returns `swiftc` arguments for a precompiled Clang module, if possible.
 
-    If no precompiled module was emitted for this module, then this function
-    falls back to the textual module map.
+    If a precompiled module is present for this module, then flags for both it
+    and the module map are returned (the latter is required in order to map
+    headers to modules in some scenarios, since the precompiled modules are
+    passed by name). If no precompiled module is present for this module, then
+    this function falls back to the textual module map alone.
 
     Args:
         module: A struct containing information about the module, as defined by
             `swift_common.create_module`.
 
     Returns:
-        A list of arguments to pass to `swiftc`.
+        A list of arguments, possibly empty, to pass to `swiftc` (without the
+        `-Xcc` prefix).
     """
-    args = []
     if module.clang.precompiled_module:
-        args.extend([
-            "-Xcc",
+        # If we're consuming an explicit module, we must also provide the
+        # textual module map, whether or not it's a system module.
+        return [
             "-fmodule-file={}={}".format(
                 module.name,
                 module.clang.precompiled_module.path,
             ),
-        ])
-    if module.clang.module_map:
-        args.extend(_clang_modulemap_dependency_args(module))
-    return args
+        ] + _clang_modulemap_dependency_args(module, ignore_system = False)
+    else:
+        # If we have no explicit module, then only include module maps for
+        # non-system modules.
+        return _clang_modulemap_dependency_args(module)
 
 def _dependencies_clang_modulemaps_configurator(prerequisites, args):
     """Configures Clang module maps from dependencies."""
@@ -1005,7 +1052,15 @@ def _dependencies_clang_modulemaps_configurator(prerequisites, args):
         if module.clang
     ]
 
-    args.add_all(modules, map_each = _clang_modulemap_dependency_args)
+    # Uniquify the arguments because different modules might be defined in the
+    # same module map file, so it only needs to be present once on the command
+    # line.
+    args.add_all(
+        modules,
+        before_each = "-Xcc",
+        map_each = _clang_modulemap_dependency_args,
+        uniquify = True,
+    )
 
     return _collect_clang_module_inputs(
         cc_info = prerequisites.cc_info,
@@ -1023,7 +1078,15 @@ def _dependencies_clang_modules_configurator(prerequisites, args):
         if module.clang
     ]
 
-    args.add_all(modules, map_each = _clang_module_dependency_args)
+    # Uniquify the arguments because different modules might be defined in the
+    # same module map file, so it only needs to be present once on the command
+    # line.
+    args.add_all(
+        modules,
+        before_each = "-Xcc",
+        map_each = _clang_module_dependency_args,
+        uniquify = True,
+    )
 
     return _collect_clang_module_inputs(
         cc_info = prerequisites.cc_info,
@@ -1160,7 +1223,6 @@ def _conditional_compilation_flag_configurator(prerequisites, args):
     all_defines = depset(
         prerequisites.defines,
         transitive = [
-            prerequisites.transitive_defines,
             # Take any Swift-compatible defines from Objective-C dependencies
             # and define them for Swift.
             prerequisites.cc_info.compilation_context.defines,
@@ -1379,15 +1441,22 @@ def compile(
         merged_providers.swift_info.transitive_modules.to_list()
     )
 
+    transitive_swiftmodules = []
+    defines_set = sets.make(defines)
+    for module in transitive_modules:
+        swift_module = module.swift
+        if not swift_module:
+            continue
+        transitive_swiftmodules.append(swift_module.swiftmodule)
+        if swift_module.defines:
+            defines_set = sets.union(
+                defines_set,
+                sets.make(swift_module.defines),
+            )
+
     # We need this when generating the VFS overlay file and also when
     # configuring inputs for the compile action, so it's best to precompute it
     # here.
-    transitive_swiftmodules = [
-        module.swift.swiftmodule
-        for module in transitive_modules
-        if module.swift
-    ]
-
     if is_feature_enabled(
         feature_configuration = feature_configuration,
         feature_name = SWIFT_FEATURE_VFSOVERLAY,
@@ -1409,7 +1478,7 @@ def compile(
         additional_inputs = additional_inputs,
         bin_dir = bin_dir,
         cc_info = merged_providers.cc_info,
-        defines = defines,
+        defines = sets.to_list(defines_set),
         genfiles_dir = genfiles_dir,
         is_swift = True,
         module_name = module_name,
@@ -1418,7 +1487,6 @@ def compile(
         ),
         objc_info = merged_providers.objc_info,
         source_files = srcs,
-        transitive_defines = merged_providers.swift_info.transitive_defines,
         transitive_modules = transitive_modules,
         transitive_swiftmodules = transitive_swiftmodules,
         user_compile_flags = copts + swift_toolchain.command_line_copts,
@@ -1707,11 +1775,11 @@ def _declare_compile_outputs(
             actions = actions,
             target_name = target_name,
         )
-        _write_objc_header_module_map(
+        write_module_map(
             actions = actions,
+            module_map_file = generated_module_map,
             module_name = module_name,
-            objc_header = generated_header,
-            output = generated_module_map,
+            public_headers = [generated_header],
         )
     else:
         generated_module_map = None
@@ -2027,28 +2095,6 @@ def _register_post_compile_actions(
         linker_inputs = linker_inputs,
     )
 
-def find_swift_version_copt_value(copts):
-    """Returns the value of the `-swift-version` argument, if found.
-
-    Args:
-        copts: The list of copts to be scanned.
-
-    Returns:
-        The value of the `-swift-version` argument, or None if it was not found
-        in the copt list.
-    """
-
-    # Note that the argument can occur multiple times, and the last one wins.
-    last_swift_version = None
-
-    count = len(copts)
-    for i in range(count):
-        copt = copts[i]
-        if copt == "-swift-version" and i + 1 < count:
-            last_swift_version = copts[i + 1]
-
-    return last_swift_version
-
 def new_objc_provider(
         deps,
         link_inputs,
@@ -2197,29 +2243,6 @@ def swift_library_output_map(name, alwayslink):
     return {
         "archive": "lib{}.{}".format(name, extension),
     }
-
-def _write_objc_header_module_map(
-        actions,
-        module_name,
-        objc_header,
-        output):
-    """Writes a module map for a generated Swift header to a file.
-
-    Args:
-        actions: The context's actions object.
-        module_name: The name of the Swift module.
-        objc_header: The `File` representing the generated header.
-        output: The `File` to which the module map should be written.
-    """
-    actions.write(
-        content = ('module "{module_name}" {{\n' +
-                   '  header "../{header_name}"\n' +
-                   "}}\n").format(
-            header_name = objc_header.basename,
-            module_name = module_name,
-        ),
-        output = output,
-    )
 
 def _index_store_path_overridden(copts):
     """Checks if index_while_building must be disabled.

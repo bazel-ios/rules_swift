@@ -40,7 +40,7 @@ def private_deps_test_suite(name = "private_deps"):
         expected_files = [
             "test_fixtures_private_deps_private_swift.swiftmodule",
         ],
-        field = "transitive_swiftmodules",
+        field = "transitive_modules.swift!.swiftmodule",
         provider = "SwiftInfo",
         tags = [name],
         target_under_test = "@build_bazel_rules_swift//test/fixtures/private_deps:private_swift",
@@ -51,7 +51,7 @@ def private_deps_test_suite(name = "private_deps"):
         expected_files = [
             "test_fixtures_private_deps_public_swift.swiftmodule",
         ],
-        field = "transitive_swiftmodules",
+        field = "transitive_modules.swift!.swiftmodule",
         provider = "SwiftInfo",
         tags = [name],
         target_under_test = "@build_bazel_rules_swift//test/fixtures/private_deps:public_swift",
@@ -66,7 +66,7 @@ def private_deps_test_suite(name = "private_deps"):
             "test_fixtures_private_deps_public_swift.swiftmodule",
             "-test_fixtures_private_deps_private_swift.swiftmodule",
         ],
-        field = "transitive_swiftmodules",
+        field = "transitive_modules.swift!.swiftmodule",
         provider = "SwiftInfo",
         tags = [name],
         target_under_test = "@build_bazel_rules_swift//test/fixtures/private_deps:client_swift_deps",
@@ -94,10 +94,10 @@ def private_deps_test_suite(name = "private_deps"):
     private_deps_provider_test(
         name = "{}_client_cc_deps_modulemaps".format(name),
         expected_files = [
-            "/test/fixtures/private_deps/public_cc.modulemaps/module.modulemap",
-            "-/test/fixtures/private_deps/private_cc.modulemaps/module.modulemap",
+            "/test/fixtures/private_deps/public_cc.swift.modulemap",
+            "-/test/fixtures/private_deps/private_cc.swift.modulemap",
         ],
-        field = "transitive_modulemaps",
+        field = "transitive_modules.clang!.module_map",
         provider = "SwiftInfo",
         tags = [name],
         target_under_test = "@build_bazel_rules_swift//test/fixtures/private_deps:client_cc_deps",
@@ -115,7 +115,7 @@ def private_deps_test_suite(name = "private_deps"):
             # dependencies, which we need to ignore.
             "*",
         ],
-        field = "linking_context.libraries_to_link.static_library!",
+        field = "linking_context.linker_inputs.libraries.static_library!",
         provider = "CcInfo",
         tags = [name],
         target_under_test = "@build_bazel_rules_swift//test/fixtures/private_deps:client_cc_deps",
