@@ -16,7 +16,8 @@
 
 load("@bazel_skylib//lib:partial.bzl", "partial")
 load("@bazel_skylib//lib:types.bzl", "types")
-load(":features.bzl", "are_all_features_enabled")
+load(":feature_names.bzl", "SWIFT_FEATURE_INDEX_WHILE_BUILDING_V2")
+load(":features.bzl", "are_all_features_enabled", "is_feature_enabled")
 load(":toolchain_config.bzl", "swift_toolchain_config")
 
 # The names of actions currently supported by the Swift build rules.
@@ -217,6 +218,19 @@ def run_toolchain_action(
             tool_config.use_param_file
         ):
             execution_requirements["supports-workers"] = "1"
+
+        # For index_while_building_v2 we import a subset of the indexed outputs
+        # from the global index store cache into bazel-out. The program that
+        # handles this is an external program
+        if is_feature_enabled(
+            feature_configuration = feature_configuration,
+            feature_name = SWIFT_FEATURE_INDEX_WHILE_BUILDING_V2,
+        ) and len(swift_toolchain.swift_worker_output_processor[DefaultInfo].files.to_list()):
+            processor = swift_toolchain.swift_worker_output_processor[DefaultInfo].files.to_list()[0]
+            tools.append(processor)
+            args.add_all([
+               "-Xwrapped-swift-output-processor",
+               processor.path])
 
         executable = swift_toolchain.swift_worker
         tool_executable_args.add(tool_config.executable)

@@ -22,9 +22,11 @@
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "tools/common/file_system.h"
 #include "tools/common/path_utils.h"
+#include "tools/common/process.h"
 #include "tools/common/string_utils.h"
 #include "tools/common/temp_file.h"
 #include "tools/worker/output_file_map.h"
@@ -64,6 +66,13 @@ void WorkProcessor::ProcessWorkRequest(
   bool is_wmo = false;
 
   std::string prev_arg;
+
+  std::string bazel_index_store_path;
+  bool enable_global_index_store = false;
+
+
+  std::string output_processor;
+
   for (auto arg : request.arguments()) {
     auto original_arg = arg;
     // Peel off the `-output-file-map` argument, so we can rewrite it if
@@ -77,6 +86,27 @@ void WorkProcessor::ProcessWorkRequest(
       is_wmo = true;
     }
 
+    // The output processor is passed as an argument
+    if (arg == "-Xwrapped-swift-output-processor") {
+      arg.clear();
+    } else if (prev_arg == "-Xwrapped-swift-output-processor") {
+      output_processor = arg;
+      arg.clear();
+    }
+
+    // Peel off index-store-path, we will conditionally pop on a new one if
+    // it passes -Xwrapped-swift-enable-global-index-store
+    if (arg == "-index-store-path") {
+      arg.clear();
+    } else if (prev_arg == "-index-store-path") {
+      bazel_index_store_path = arg;
+      arg.clear();
+    }
+    if (arg == "-Xwrapped-swift-enable-global-index-store") {
+      arg.clear();
+      enable_global_index_store = true;
+    }
+
     if (!arg.empty()) {
       params_file_stream << arg << '\n';
     }
@@ -84,9 +114,21 @@ void WorkProcessor::ProcessWorkRequest(
     prev_arg = original_arg;
   }
 
+  // Material within this index store is namespaced to arcitecture, os, etc
+  auto exec_root = GetCurrentDirectory();
+  auto global_index_store = exec_root + "/bazel-out/global_index_store";
+  if (enable_global_index_store) {
+    processed_args.push_back("-index-store-path");
+    processed_args.push_back(global_index_store);
+  } else if (!bazel_index_store_path.empty()) {
+    processed_args.push_back("-index-store-path");
+    processed_args.push_back(bazel_index_store_path);
+  }
+
   if (!output_file_map_path.empty()) {
+    output_file_map.ReadFromPath(output_file_map_path);
+
     if (!is_wmo) {
-      output_file_map.ReadFromPath(output_file_map_path);
 
       // Rewrite the output file map to use the incremental storage area and
       // pass the compiler the path to the rewritten file.
@@ -130,7 +172,6 @@ void WorkProcessor::ProcessWorkRequest(
   SwiftRunner swift_runner(processed_args, /*force_response_file=*/true);
 
   int exit_code = swift_runner.Run(&stderr_stream, /*stdout_to_stderr=*/true);
-
   if (!is_wmo) {
     // Copy the output files from the incremental storage area back to the
     // locations where Bazel declared the files.
@@ -142,6 +183,35 @@ void WorkProcessor::ProcessWorkRequest(
         exit_code = EXIT_FAILURE;
       }
     }
+  }
+
+  // Import global indexes if compilation succeeds
+  if (exit_code != EXIT_FAILURE && enable_global_index_store) {
+    std::vector<std::string> ii_args;
+
+    auto index_import_path = exec_root + "/" + output_processor;
+    ii_args.push_back(index_import_path);
+
+    // Use the output path map to deterine what compilation ouputs to import
+    auto outputs  = output_file_map.incremental_outputs();
+    std::map<std::string, std::string>::iterator it;
+    for (it = outputs.begin(); it != outputs.end(); it++) {
+      auto output_path = it->first;
+      auto file_type = output_path.substr(output_path.find_last_of(".") + 1);
+      if (file_type == "o") {
+        ii_args.push_back("-import-output-file");
+        ii_args.push_back(output_path);
+      }
+    }
+
+    // Copy back from the global index store to bazel's index store
+    ii_args.push_back(global_index_store);
+
+    ii_args.push_back(exec_root + "/" + bazel_index_store_path);
+
+    const std::vector<std::string>& ii_args_ = ii_args;
+    // Dupes the output into the action for failure cases
+    exit_code = RunSubProcess(ii_args_, &stderr_stream, /*stdout_to_stderr=*/true);
   }
 
   response->set_exit_code(exit_code);

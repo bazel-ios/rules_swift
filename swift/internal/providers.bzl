@@ -201,6 +201,9 @@ target.
 compiler and other Swift tools (for both incremental and non-incremental
 compiles).
 """,
+        "swift_worker_output_processor": """\
+`File`. An executable that runs to manage llvm indexes for index while building v2.
+""",
         "system_name": """\
 `String`. The name of the operating system that the toolchain is targeting.
 """,

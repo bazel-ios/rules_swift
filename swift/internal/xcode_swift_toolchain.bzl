@@ -691,6 +691,7 @@ def _xcode_swift_toolchain_impl(ctx):
             required_implicit_deps = [],
             supports_objc_interop = True,
             swift_worker = ctx.executable._worker,
+            swift_worker_output_processor = ctx.attr._worker_output_processor,
             system_name = "darwin",
             test_configuration = struct(
                 env = env,
@@ -725,6 +726,14 @@ An executable that wraps Swift compiler invocations and also provides support
 for incremental compilation using a persistent mode.
 """,
                 executable = True,
+            ),
+            "_worker_output_processor": attr.label(
+                cfg = "host",
+                allow_files = True,
+                default = "@build_bazel_rules_swift//tools/worker:worker_output_processor",
+                doc = """\
+An executable used to operate on llvm indexs for index while building.
+""",
             ),
             "_xcode_config": attr.label(
                 default = configuration_field(

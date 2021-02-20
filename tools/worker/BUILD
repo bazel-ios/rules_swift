@@ -77,6 +77,29 @@ cc_binary(
     }),
 )
 
+# Internal hinge for index while building V2 feature
+config_setting(
+    name = "index_while_building_v2",
+    values = {
+        "features": "swift.index_while_building_v2"
+    },
+)
+
+
+filegroup(
+   name = "worker_output_processor",
+   # with index_while_building_v2 we want to add a dependency on the tool that
+   # manages the per swift_library index. Otherwise, don't load it
+   # This is mainly an internal capability right now - check
+   # tools/worker/work_processor.cc for usage:
+   # build_bazel_rules_swift_index_import is be provided by the user for now
+   srcs = select({
+       ":index_while_building_v2": ["@build_bazel_rules_swift_index_import//:index_import"],
+       "//conditions:default": []
+   }),
+   visibility = ["//visibility:public"],
+)
+
 # Consumed by Bazel integration tests.
 filegroup(
     name = "for_bazel_tests",

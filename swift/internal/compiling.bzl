@@ -45,6 +45,7 @@ load(
     "SWIFT_FEATURE_FULL_DEBUG_INFO",
     "SWIFT_FEATURE_IMPLICIT_MODULES",
     "SWIFT_FEATURE_INDEX_WHILE_BUILDING",
+    "SWIFT_FEATURE_INDEX_WHILE_BUILDING_V2",
     "SWIFT_FEATURE_MINIMAL_DEPS",
     "SWIFT_FEATURE_MODULE_MAP_HOME_IS_CWD",
     "SWIFT_FEATURE_NO_EMBED_DEBUG_MODULE",
@@ -1405,6 +1406,15 @@ def compile(
     else:
         vfsoverlay_file = None
 
+    # For index while building v2 it uses a global index store which is
+    # configured by this flag
+    additional_copts = []
+    if is_feature_enabled(
+        feature_configuration = feature_configuration,
+        feature_name = SWIFT_FEATURE_INDEX_WHILE_BUILDING_V2,
+    ):
+        additional_copts.append("-Xwrapped-swift-enable-global-index-store")
+
     prerequisites = struct(
         additional_inputs = additional_inputs,
         bin_dir = bin_dir,
@@ -1421,7 +1431,7 @@ def compile(
         transitive_defines = merged_providers.swift_info.transitive_defines,
         transitive_modules = transitive_modules,
         transitive_swiftmodules = transitive_swiftmodules,
-        user_compile_flags = copts + swift_toolchain.command_line_copts,
+        user_compile_flags = copts + swift_toolchain.command_line_copts + additional_copts,
         vfsoverlay_file = vfsoverlay_file,
         vfsoverlay_search_path = _SWIFTMODULES_VFS_ROOT,
         # Merge the compile outputs into the prerequisites.
@@ -1756,6 +1766,9 @@ def _declare_compile_outputs(
     index_while_building = is_feature_enabled(
         feature_configuration = feature_configuration,
         feature_name = SWIFT_FEATURE_INDEX_WHILE_BUILDING,
+    ) or is_feature_enabled(
+        feature_configuration = feature_configuration,
+        feature_name = SWIFT_FEATURE_INDEX_WHILE_BUILDING_V2,
     )
     if (
         index_while_building and
