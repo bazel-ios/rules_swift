@@ -17,23 +17,17 @@ dependencies of the Swift rules.
 """
 
 load("@build_bazel_apple_support//lib:repositories.bzl", "apple_support_dependencies")
-load(
-    "@rules_proto//proto:repositories.bzl",
-    "rules_proto_dependencies",
-    "rules_proto_toolchains",
-)
+load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")
 
 def swift_rules_extra_dependencies():
     """Fetches transitive repositories of the dependencies of `rules_swift`.
 
     Users should call this macro in their `WORKSPACE` following the use of
-    `swift_rules_dependencies` to ensure that all of the dependencies of
-    the Swift rules are downloaded and that they are isolated from changes
+    `swift_rules_dependencies` to ensure that all of the dependencies of 
+    the Swift rules are downloaded and that they are isolated from changes 
     to those dependencies.
     """
 
     apple_support_dependencies()
 
-    rules_proto_dependencies()
-
-    rules_proto_toolchains()
+    protobuf_deps()
