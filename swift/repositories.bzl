@@ -108,6 +108,40 @@ def swift_rules_dependencies():
         type = "zip",
     )
 
+    # It relies on `index-import` to import indexes into Bazel's remote
+    # cache and allow using a global index internally in workers
+    _maybe(
+        http_archive,
+        name = "build_bazel_rules_swift_index_import",
+        build_file_content = """\
+load("@bazel_skylib//rules:native_binary.bzl", "native_binary")
+
+native_binary(
+    name = "index_import",
+    src = "index-import",
+    out = "index-import",
+    visibility = ["//visibility:public"],
+)
+
+native_binary(
+    name = "validate_index",
+    src = "validate-index",
+    out = "validate-index",
+    visibility = ["//visibility:public"],
+)
+
+native_binary(
+    name = "absolute_unit",
+    src = "absolute-unit",
+    out = "absolute-unit",
+    visibility = ["//visibility:public"],
+)
+""",
+        canonical_id = "index-import-5.3.2.5",
+        urls = ["https://github.com/bazel-ios/index-import/releases/download/5.3.2.5/index-import.zip"],
+        sha256 = "79e9b2cd3e988155b86668c56d95705e1a4a7c7b6d702ff5ded3a18d1291a39a",
+    )
+
     _maybe(
         swift_autoconfiguration,
         name = "build_bazel_rules_swift_local_config",

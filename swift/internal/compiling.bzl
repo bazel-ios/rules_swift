@@ -46,6 +46,7 @@ load(
     "SWIFT_FEATURE_FASTBUILD",
     "SWIFT_FEATURE_FULL_DEBUG_INFO",
     "SWIFT_FEATURE_INDEX_WHILE_BUILDING",
+    "SWIFT_FEATURE_INDEX_WHILE_BUILDING_V2",
     "SWIFT_FEATURE_MINIMAL_DEPS",
     "SWIFT_FEATURE_MODULE_MAP_HOME_IS_CWD",
     "SWIFT_FEATURE_NO_EMBED_DEBUG_MODULE",
@@ -729,6 +730,13 @@ def compile_action_configs():
                 SWIFT_FEATURE_INDEX_WHILE_BUILDING,
                 SWIFT_FEATURE_DISABLE_SYSTEM_INDEX,
             ],
+        ),
+
+        swift_toolchain_config.action_config(
+            actions = [swift_action_names.COMPILE],
+
+            configurators = [_index_while_building_configurator],
+            features = [SWIFT_FEATURE_INDEX_WHILE_BUILDING_V2],
         ),
 
         # User-defined conditional compilation flags (defined for Swift; those
@@ -1487,6 +1495,15 @@ def compile(
     else:
         vfsoverlay_file = None
 
+    # For index while building v2 it uses a global index store which is
+    # configured by this flag
+    additional_copts = []
+    if is_feature_enabled(
+        feature_configuration = feature_configuration,
+        feature_name = SWIFT_FEATURE_INDEX_WHILE_BUILDING_V2,
+    ):
+        additional_copts.append("-Xwrapped-swift=-enable-global-index-store")
+
     prerequisites = struct(
         additional_inputs = additional_inputs,
         bin_dir = bin_dir,
@@ -1502,7 +1519,7 @@ def compile(
         source_files = srcs,
         transitive_modules = transitive_modules,
         transitive_swiftmodules = transitive_swiftmodules,
-        user_compile_flags = copts + swift_toolchain.command_line_copts,
+        user_compile_flags = copts + swift_toolchain.command_line_copts + additional_copts,
         vfsoverlay_file = vfsoverlay_file,
         vfsoverlay_search_path = _SWIFTMODULES_VFS_ROOT,
         # Merge the compile outputs into the prerequisites.
@@ -1834,10 +1851,19 @@ def _declare_compile_outputs(
     # Configure index-while-building if requested. IDEs and other indexing tools
     # can enable this feature on the command line during a build and then access
     # the index store artifacts that are produced.
-    index_while_building = is_feature_enabled(
+    index_while_building_v1 = is_feature_enabled(
         feature_configuration = feature_configuration,
         feature_name = SWIFT_FEATURE_INDEX_WHILE_BUILDING,
     )
+    index_while_building_v2 = is_feature_enabled(
+        feature_configuration = feature_configuration,
+        feature_name = SWIFT_FEATURE_INDEX_WHILE_BUILDING_V2,
+    )
+
+    if index_while_building_v1 and index_while_building_v2:
+        fail("can't use both swift.index_while_building and swift.index_while_building_v2")
+
+    index_while_building = (index_while_building_v1 or index_while_building_v2)
     if (
         index_while_building and
         not _index_store_path_overridden(user_compile_flags)
