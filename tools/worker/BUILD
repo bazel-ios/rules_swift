@@ -18,6 +18,14 @@ config_setting(
     },
 )
 
+# Internal hinge for index while building V2 feature
+config_setting(
+    name = "index_while_building_v2",
+    values = {
+        "features": "swift.index_while_building_v2"
+    },
+)
+
 cc_library(
     name = "compile_with_worker",
     srcs = [
@@ -38,6 +46,18 @@ cc_library(
         "@com_github_nlohmann_json//:json",
         "@com_google_protobuf//:protobuf",
     ],
+    copts = select({
+        ":index_while_building_v2": [
+            "-DINDEX_IMPORT_PATH=\\\"$(rootpath @build_bazel_rules_swift_index_import//:index_import)\\\""
+        ],
+        "//conditions:default": [],
+    }),
+    data = select({
+        ":index_while_building_v2": [
+            "@build_bazel_rules_swift_index_import//:index_import"
+        ],
+        "//conditions:default": [],
+    })
 )
 
 cc_library(
