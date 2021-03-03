@@ -90,6 +90,10 @@ SWIFT_FEATURE_ENABLE_TESTING = "swift.enable_testing"
 # warnings otherwise.
 SWIFT_FEATURE_FULL_DEBUG_INFO = "swift.full_debug_info"
 
+# Index while building - using a global index store cache
+# https://docs.google.com/document/d/1cH2sTpgSnJZCkZtJl1aY-rzy4uGPcrI-6RrUpdATO2Q/
+SWIFT_FEATURE_INDEX_WHILE_BUILDING_V2 = "swift.index_while_building_v2"
+
 # If enabled, the compilation action for a target will produce an index store.
 SWIFT_FEATURE_INDEX_WHILE_BUILDING = "swift.index_while_building"
 
