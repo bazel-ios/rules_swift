@@ -591,7 +591,7 @@ def _is_xcode_at_least_version(xcode_config, desired_version):
     desired_version_value = apple_common.dotted_version(desired_version)
     return current_version >= desired_version_value
 
-def _swift_apple_target_triple(cpu, platform, version):
+def _swift_apple_target_triple(ctx, cpu, platform, version):
     """Returns a target triple string for an Apple platform.
 
     Args:
@@ -609,6 +609,16 @@ def _swift_apple_target_triple(cpu, platform, version):
     environment = ""
     if not platform.is_device:
         environment = "-simulator"
+
+    # Bazel 4 hacks for building x86_64 as arm64
+    # In this situation, Bazel doesn't yet support an arm64 so we use the
+    # x86_64 cpu but compile it as arm64
+    if str(platform.platform_type) == "ios" and not platform.is_device and "bazel4.override_simulator_cpu_arm64" in ctx.features:
+        cpu = "arm64"
+
+    # Override the CPU to arm64 - this sets virutal all CPUs to arm64
+    if str(platform.platform_type) == "macos" and "bazel4.override_host_cpu_arm64" in ctx.features:
+        cpu = "arm64"
 
     return "{cpu}-apple-{platform}{version}{environment}".format(
         cpu = cpu,
@@ -647,7 +657,7 @@ def _xcode_swift_toolchain_impl(ctx):
     target_os_version = xcode_config.minimum_os_for_platform_type(
         platform.platform_type,
     )
-    target = _swift_apple_target_triple(cpu, platform, target_os_version)
+    target = _swift_apple_target_triple(ctx, cpu, platform, target_os_version)
 
     swift_linkopts_providers = _swift_linkopts_providers(
         apple_fragment,
